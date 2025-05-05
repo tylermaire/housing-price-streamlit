@@ -59,8 +59,23 @@ st.line_chart(sub.set_index('period_begin')['median_sale_price'])
 safe_name = selected.replace(",", "").replace(" ", "_").replace("/", "_")
 model_path = f'metro_models/{safe_name}.pkl'
 
+# 🔍 Debug: show what file we're looking for
+st.sidebar.markdown("---")
+st.sidebar.write("🔍 Looking for model file:")
+st.sidebar.code(model_path)
+
+# 🔍 Show available models (top 10)
+try:
+    model_files = os.listdir("metro_models")
+    st.sidebar.write("📂 Found models (sample):")
+    st.sidebar.code(model_files[:10])
+except Exception as e:
+    st.sidebar.error(f"Error accessing metro_models/: {e}")
+    st.stop()
+
+# Check for model existence
 if not os.path.exists(model_path):
-    st.error("🚫 Model not found for this metro.")
+    st.warning(f"🚫 Model not found for {selected}.\nExpected file: `{model_path}`")
     st.stop()
 
 model = joblib.load(model_path)
