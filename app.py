@@ -56,9 +56,9 @@ st.title(f"📊 Median Sale Price in {selected}")
 st.line_chart(sub.set_index('period_begin')['median_sale_price'])
 
 # -------------------- Step 6: Load trained model --------------------
-# Match filename format: Atlanta_GA_metro_area.pkl
 safe_name = selected.replace(",", "").replace(" ", "_").replace("/", "_")
-model_path = f'metro_models/{safe_name}.pkl'
+base_dir = os.path.dirname(__file__)
+model_path = os.path.join(base_dir, "metro_models", f"{safe_name}.pkl")
 
 # 🔍 Debug sidebar info
 st.sidebar.markdown("---")
@@ -67,7 +67,7 @@ st.sidebar.code(model_path)
 
 # List a few available models
 try:
-    model_files = os.listdir("metro_models")
+    model_files = os.listdir(os.path.join(base_dir, "metro_models"))
     st.sidebar.write("📂 Models available (sample):")
     st.sidebar.code(model_files[:10])
 except Exception as e:
@@ -97,4 +97,3 @@ st.success(f"${pred:,.0f}")
 
 if st.sidebar.checkbox("Show prediction inputs"):
     st.write(pd.DataFrame(X_pred, columns=['median_sale_price', 'rolling_avg_price', 'yoy_price_change', 'lag_1']))
-
