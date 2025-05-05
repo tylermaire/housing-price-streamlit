@@ -18,7 +18,7 @@ def download_and_extract():
         gdown.download(f"https://drive.google.com/uc?id={MODELS_FILE_ID}", "metro_models.zip", quiet=False)
         with zipfile.ZipFile("metro_models.zip", "r") as zip_ref:
             zip_ref.extractall("metro_models")
-        st.success("✅ Models downloaded and ready.")
+        st.success("✅ Models downloaded and extracted.")
 
     if not os.path.exists("metro.tsv.gz"):
         st.info("📊 Downloading Redfin metro dataset...")
@@ -56,26 +56,27 @@ st.title(f"📊 Median Sale Price in {selected}")
 st.line_chart(sub.set_index('period_begin')['median_sale_price'])
 
 # -------------------- Step 6: Load trained model --------------------
+# Match filename format: Atlanta_GA_metro_area.pkl
 safe_name = selected.replace(",", "").replace(" ", "_").replace("/", "_")
 model_path = f'metro_models/{safe_name}.pkl'
 
-# 🔍 Debug: show what file we're looking for
+# 🔍 Debug sidebar info
 st.sidebar.markdown("---")
 st.sidebar.write("🔍 Looking for model file:")
 st.sidebar.code(model_path)
 
-# 🔍 Show available models (top 10)
+# List a few available models
 try:
     model_files = os.listdir("metro_models")
-    st.sidebar.write("📂 Found models (sample):")
+    st.sidebar.write("📂 Models available (sample):")
     st.sidebar.code(model_files[:10])
 except Exception as e:
-    st.sidebar.error(f"Error accessing metro_models/: {e}")
+    st.sidebar.error(f"❌ Error accessing metro_models/: {e}")
     st.stop()
 
-# Check for model existence
+# Load model or show warning
 if not os.path.exists(model_path):
-    st.warning(f"🚫 Model not found for {selected}.\nExpected file: `{model_path}`")
+    st.warning(f"🚫 Model not found for {selected}\nExpected file: `{model_path}`")
     st.stop()
 
 model = joblib.load(model_path)
@@ -91,8 +92,9 @@ X_pred = np.array([[f1, f2, f3, f4]])
 pred = model.predict(X_pred)[0]
 
 # -------------------- Step 8: Display prediction --------------------
-st.header("💰 Predicted Price Next Month")
+st.header("💰 Predicted Median Price Next Month")
 st.success(f"${pred:,.0f}")
 
 if st.sidebar.checkbox("Show prediction inputs"):
     st.write(pd.DataFrame(X_pred, columns=['median_sale_price', 'rolling_avg_price', 'yoy_price_change', 'lag_1']))
+
