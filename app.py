@@ -72,8 +72,10 @@ sub['ROLLING_AVG'] = sub['MEDIAN_SALE_PRICE'].rolling(3).mean()
 sub['YOY_CHANGE'] = sub['MEDIAN_SALE_PRICE'].pct_change(12)
 sub['LAG_1'] = sub['MEDIAN_SALE_PRICE'].shift(1)
 
-if sub.dropna().empty:
-    st.warning("⚠️ Not enough data to make a prediction for this metro.")
+clean_sub = sub.dropna(subset=['MEDIAN_SALE_PRICE', 'ROLLING_AVG', 'YOY_CHANGE', 'LAG_1'])
+
+if clean_sub.shape[0] < 1:
+    st.warning("⚠️ Not enough clean historical data to generate features for this metro.")
     st.stop()
 
 # Display trend chart
@@ -87,7 +89,7 @@ if model is None:
     st.stop()
 
 # Use latest values for prediction
-latest = sub.dropna().iloc[-1]
+latest = clean_sub.iloc[-1]
 f1 = float(latest['MEDIAN_SALE_PRICE'])
 f2 = float(latest['ROLLING_AVG'])
 f3 = float(latest['YOY_CHANGE'])
@@ -99,15 +101,24 @@ pred = model.predict(X_pred)[0]
 st.subheader("💰 Predicted Median Price Next Month")
 st.success(f"${pred:,.0f}")
 
-# Optional: Forecast chart (sample visualization)
+# Optional: Forecast chart
 st.subheader("📉 Forecast Visualization")
+forecast_df = sub[['PERIOD_BEGIN', 'MEDIAN_SALE_PRICE']].dropna().copy()
+next_month = forecast_df['PERIOD_BEGIN'].max() + pd.DateOffset(months=1)
+forecast_df = forecast_df.append({
+    'PERIOD_BEGIN': next_month,
+    'MEDIAN_SALE_PRICE': pred
+}, ignore_index=True)
+
 fig, ax = plt.subplots()
-ax.plot(sub['PERIOD_BEGIN'], sub['MEDIAN_SALE_PRICE'], label="Actual")
-ax.axhline(pred, color='green', linestyle='--', label='Prediction')
-ax.set_title("Median Price with Forecast")
+forecast_df.set_index('PERIOD_BEGIN')['MEDIAN_SALE_PRICE'].plot(ax=ax, label='Actual + Forecast', color='deepskyblue')
+ax.axvline(x=next_month, color='gray', linestyle='--', label='Prediction Start')
+ax.set_ylabel("Price ($)")
+ax.set_title("Forecast: Historical + Next Month")
 ax.legend()
 st.pyplot(fig)
 
 # Download option
 csv_data = pd.DataFrame({"Next Month Forecast": [pred]})
 st.download_button("Download Prediction as CSV", csv_data.to_csv(index=False), file_name="prediction.csv")
+
