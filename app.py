@@ -127,7 +127,9 @@ except Exception as e:
 # CSV download of historical + forecast
 hist = sub[['period_begin','median_sale_price']].dropna().copy()
 next_month = hist['period_begin'].max() + pd.DateOffset(months=1)
-hist = hist.append({'period_begin':next_month,'median_sale_price':pred}, ignore_index=True)
+# Add forecast row for next month
+new_row = pd.DataFrame({'period_begin':[next_month],'median_sale_price':[pred]})
+hist = pd.concat([hist, new_row], ignore_index=True)
 csv = hist.to_csv(index=False)
 st.download_button("📥 Download Historical + Forecast CSV", csv, file_name="forecast.csv", mime="text/csv")
 
