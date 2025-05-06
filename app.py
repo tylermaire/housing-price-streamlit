@@ -1,101 +1,80 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import requests
-import io
 import joblib
+import io
 
-# ------------------
-# Caching the data load
-# ------------------
+st.set_page_config(page_title="🏠 Metro Price Predictor", layout="centered")
+
 @st.cache_data
 def load_data():
-    """Load and return the metro housing data from a local TSV file or Redfin URL."""
+    """Load Redfin metro-level data."""
     try:
         df = pd.read_csv("metro.tsv.gz", sep="\t", compression="gzip")
     except FileNotFoundError:
         url = "https://redfin-public-data.s3.us-west-2.amazonaws.com/redfin_market_tracker/redfin_metro_market_tracker.tsv000.gz"
         df = pd.read_csv(url, sep="\t", compression="gzip")
-
-    df.columns = df.columns.str.lower()
-    if "period_begin" in df.columns:
-        df["period_begin"] = pd.to_datetime(df["period_begin"], errors="coerce")
-        df.dropna(subset=["region", "period_begin", "median_sale_price"], inplace=True)
-        df = df[df["region_type"] == "metro"]
-        df.sort_values(by=["region", "period_begin"], inplace=True)
+    df.columns = df.columns.str.strip().str.lower()
+    df = df[df["region_type"] == "metro"]
+    df["period_begin"] = pd.to_datetime(df["period_begin"], errors="coerce")
+    df["median_sale_price"] = pd.to_numeric(df["median_sale_price"], errors="coerce")
+    df = df.dropna(subset=["region", "period_begin", "median_sale_price"])
     return df
 
-# ------------------
-# Caching model loading
-# ------------------
+data = load_data()
+
+st.title("🏙️ Metro Housing Market Explorer")
+
+metros = sorted(data["region"].unique())
+selected_metro = st.selectbox("Select a metro area:", metros)
+
+metro_df = data[data["region"] == selected_metro].copy()
+metro_df.sort_values("period_begin", inplace=True)
+
+# Show the chart
+st.subheader(f"Median Sale Price – {selected_metro}")
+st.line_chart(metro_df.set_index("period_begin")["median_sale_price"])
+
 @st.cache_resource
-def load_model(name):
-    """Download and load the model for the given metro (if available)."""
-    safe_name = name.replace(",", "").replace(" ", "_")
-    url = f"https://raw.githubusercontent.com/tylermaire/housing-price-streamlit/main/metro_models/{safe_name}.pkl"
+def load_model(metro_name):
+    """Download and load model file for selected metro."""
+    safe_name = metro_name.replace(", ", "_").replace(" ", "_") + ".pkl"
+    model_url = f"https://raw.githubusercontent.com/tylermaire/housing-price-streamlit/main/metro_models/{safe_name}"
     try:
-        resp = requests.get(url, timeout=10)
-        if resp.status_code == 200:
-            return joblib.load(io.BytesIO(resp.content))
-    except Exception as e:
-        st.warning(f"⚠️ Could not load model: {e}")
-    return None
+        r = requests.get(model_url, timeout=5)
+        r.raise_for_status()
+        model = joblib.load(io.BytesIO(r.content))
+        return model
+    except Exception:
+        return None
 
-# ------------------
-# Load data and build UI
-# ------------------
-df = load_data()
-available_models = set()
-
-# Precheck for available model files (based on GitHub list or known names)
-metro_names = df["region"].unique().tolist()
-for name in metro_names:
-    safe_name = name.replace(",", "").replace(" ", "_")
-    available_models.add(name)  # Assume all are added to GitHub
-
-# ------------------
-# Streamlit UI
-# ------------------
-st.title("🏙️ Metro Housing Market Price Predictor")
-st.markdown("Select a metro area to view housing trends and predict next month's median sale price.")
-
-# Only list metros we expect to have models for
-valid_metros = sorted([m for m in metro_names if m in available_models])
-selected_metro = st.selectbox("Choose a metro area:", valid_metros)
-
-metro_df = df[df["region"] == selected_metro].copy()
-if metro_df.empty or len(metro_df) < 3:
-    st.error("🚫 Not enough data to display or make predictions for this metro.")
-    st.stop()
-
-# Show historical chart
-st.subheader(f"📊 Historical Median Sale Price — {selected_metro}")
-st.line_chart(
-    metro_df.set_index("period_begin")["median_sale_price"].dropna()
-)
-
-# Prepare features
-latest = metro_df.dropna().iloc[-1]
-prev = metro_df.dropna().iloc[-2]
-price_now = latest["median_sale_price"]
-rolling_avg = metro_df["median_sale_price"].rolling(3).mean().iloc[-1]
-yoy = latest.get("median_sale_price_yoy", 0)
-prev_price = prev["median_sale_price"]
-
-# Load model
 model = load_model(selected_metro)
 
-# Prediction
-st.subheader("💰 Predict Next Month's Median Sale Price")
-if model is None:
-    st.warning(f"🚫 Model not found for {selected_metro}. Prediction unavailable.")
-else:
-    f1 = st.number_input("Latest Median Price", value=float(price_now))
-    f2 = st.number_input("3-Month Rolling Avg", value=float(rolling_avg))
-    f3 = st.number_input("YoY % Change", value=float(yoy))
-    f4 = st.number_input("Previous Month's Price", value=float(prev_price))
+# Prepare features
+metro_clean = metro_df.dropna(subset=["median_sale_price"])
+if metro_clean.empty:
+    st.warning("🚫 Not enough valid data available for prediction in this metro.")
+    st.stop()
 
+metro_clean["rolling_avg_price"] = metro_clean["median_sale_price"].rolling(3).mean()
+metro_clean["yoy_price_change"] = metro_clean["median_sale_price"].pct_change(12) * 100
+metro_clean["lag_1"] = metro_clean["median_sale_price"].shift(1)
+
+latest = metro_clean.dropna().iloc[-1]
+
+st.subheader("📈 Prediction Input Features")
+f1 = st.number_input("Current Median Price", value=float(latest["median_sale_price"]), step=1000.0)
+f2 = st.number_input("3-Month Rolling Avg", value=float(latest["rolling_avg_price"]), step=1000.0)
+f3 = st.number_input("Year-over-Year Change (%)", value=float(latest["yoy_price_change"]), step=0.1, format="%.2f")
+f4 = st.number_input("Last Month's Price", value=float(latest["lag_1"]), step=1000.0)
+
+if model:
+    input_array = np.array([[f1, f2, f3, f4]])
     try:
-        pred = model.predict([[f1, f2, f3, f4]])[0]
-        st.metric("🔮 Predicted Next Month's Price", f"${pred:,.0f}")
+        pred = model.predict(input_array)[0]
+        st.metric(label="🔮 Predicted Next Month Price", value=f"${pred:,.0f}")
     except Exception as e:
         st.error(f"❌ Prediction failed: {e}")
+else:
+    st.warning("🚫 No prediction model found for this metro.")
