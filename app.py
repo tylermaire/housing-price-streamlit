@@ -125,34 +125,40 @@ except Exception as e:
     st.error(f"❌ Prediction failed: {e}")
 
 # CSV download of historical + forecast
-hist = sub[['period_begin','median_sale_price']].dropna().copy()
+hist = sub[['period_begin', 'median_sale_price']].dropna().copy()
 next_month = hist['period_begin'].max() + pd.DateOffset(months=1)
-# Add forecast row for next month
-new_row = pd.DataFrame({'period_begin':[next_month],'median_sale_price':[pred]})
+# Add forecast row for next month using concat
+new_row = pd.DataFrame({'period_begin': [next_month], 'median_sale_price': [pred]})
 hist = pd.concat([hist, new_row], ignore_index=True)
+# Convert to CSV and provide download button
 csv = hist.to_csv(index=False)
 st.download_button("📥 Download Historical + Forecast CSV", csv, file_name="forecast.csv", mime="text/csv")
 
-# ----------------------
-# 7. PDF summary download
-# ----------------------
-pdf_path = 'summary.pdf'
-with PdfPages(pdf_path) as pdf:
-    # Chart page
-    fig, ax = plt.subplots()
-    ax.plot(hist['period_begin'], hist['median_sale_price'], marker='o')
-    ax.set_title(f'{selected} Price History + Forecast')
-    ax.set_ylabel('Price ($)')
-    pdf.savefig(fig)
-    plt.close(fig)
-    # Coefficients page
-    if hasattr(model, 'coef_'):
-        fig2, ax2 = plt.subplots()
-        fi['coef'].plot(kind='bar', ax=ax2)
-        ax2.set_title('Model Coefficients')
-        pdf.savefig(fig2)
-        plt.close(fig2)
+# PDF summary download
+def create_pdf():
+    pdf_path = 'summary.pdf'
+    with PdfPages(pdf_path) as pdf:
+        # Price history + forecast plot
+        fig, ax = plt.subplots()
+        ax.plot(hist['period_begin'], hist['median_sale_price'], marker='o')
+        ax.set_title(f'{selected} Price History + Forecast')
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Median Sale Price')
+        fig.autofmt_xdate()
+        pdf.savefig(fig)
+        plt.close(fig)
+        # Coefficients plot
+        if hasattr(model, 'coef_'):
+            fi = pd.DataFrame({'feature': ['median_sale_price', 'rolling_avg', 'yoy_pct', 'lag_1'], 'coef': model.coef_}).set_index('feature')
+            fig2, ax2 = plt.subplots()
+            fi['coef'].plot(kind='bar', ax=ax2)
+            ax2.set_title('Model Coefficients')
+            ax2.set_ylabel('Coefficient')
+            pdf.savefig(fig2)
+            plt.close(fig2)
+    return pdf_path
 
-with open(pdf_path, 'rb') as f:
+pdf_file = create_pdf()
+with open(pdf_file, 'rb') as f:
     pdf_bytes = f.read()
 st.download_button("📥 Download PDF Summary", pdf_bytes, file_name="summary.pdf", mime="application/pdf")
