@@ -5,80 +5,94 @@ import requests
 import joblib
 import io
 
-st.set_page_config(page_title="🏠 Metro Price Predictor", layout="centered")
+st.set_page_config(page_title="🏠 Metro Price Predictor", layout="wide")
 
 @st.cache_data
 def load_data():
-    """Load Redfin metro-level data."""
+    """Load Redfin metro-level data from local or AWS."""
     try:
         df = pd.read_csv("metro.tsv.gz", sep="\t", compression="gzip")
     except FileNotFoundError:
-        url = "https://redfin-public-data.s3.us-west-2.amazonaws.com/redfin_market_tracker/redfin_metro_market_tracker.tsv000.gz"
+        url = (
+            "https://redfin-public-data.s3.us-west-2.amazonaws.com/"
+            "redfin_market_tracker/redfin_metro_market_tracker.tsv000.gz"
+        )
         df = pd.read_csv(url, sep="\t", compression="gzip")
     df.columns = df.columns.str.strip().str.lower()
     df = df[df["region_type"] == "metro"]
     df["period_begin"] = pd.to_datetime(df["period_begin"], errors="coerce")
     df["median_sale_price"] = pd.to_numeric(df["median_sale_price"], errors="coerce")
-    df = df.dropna(subset=["region", "period_begin", "median_sale_price"])
+    df.dropna(subset=["region", "period_begin", "median_sale_price"], inplace=True)
     return df
 
-data = load_data()
+df = load_data()
 
 st.title("🏙️ Metro Housing Market Explorer")
+st.write("Select a metro to view trends and predict next month's median sale price.")
 
-metros = sorted(data["region"].unique())
-selected_metro = st.selectbox("Select a metro area:", metros)
+# Metro selector with search
+metros = sorted(df["region"].unique())
+search = st.text_input("🔍 Search metro", "")
+choices = [m for m in metros if search.lower() in m.lower()] if search else metros
+selected = st.selectbox("Choose metro:", choices)
 
-metro_df = data[data["region"] == selected_metro].copy()
-metro_df.sort_values("period_begin", inplace=True)
+# Filter and plot history
+metro_df = df[df["region"] == selected].sort_values("period_begin")
+if metro_df.empty:
+    st.error("No data for this metro.")
+    st.stop()
 
-# Show the chart
-st.subheader(f"Median Sale Price – {selected_metro}")
+st.subheader(f"📊 Historical Median Sale Price — {selected}")
 st.line_chart(metro_df.set_index("period_begin")["median_sale_price"])
+
+# Compute features
+metro_df["rolling_avg"] = metro_df["median_sale_price"].rolling(3).mean()
+metro_df["yoy_pct"] = metro_df["median_sale_price"].pct_change(12) * 100
+metro_df["lag_1"] = metro_df["median_sale_price"].shift(1)
+features_df = metro_df.dropna(subset=["rolling_avg", "yoy_pct", "lag_1"])
+
+if features_df.empty:
+    st.warning("Not enough complete data to compute prediction features.")
+    st.stop()
+
+latest = features_df.iloc[-1]
 
 @st.cache_resource
 def load_model(metro_name):
-    """Download and load model file for selected metro."""
-    safe_name = metro_name.replace(", ", "_").replace(" ", "_") + ".pkl"
-    model_url = f"https://raw.githubusercontent.com/tylermaire/housing-price-streamlit/main/metro_models/{safe_name}"
+    """Fetch the .pkl model named <Metro>_metro_area.pkl from GitHub raw."""
+    base = metro_name.replace(", ", "_").replace(" ", "_")
+    filename = f"{base}_metro_area.pkl"
+    url = (
+        "https://raw.githubusercontent.com/"
+        "tylermaire/housing-price-streamlit/"
+        "main/metro_models/"
+        + filename
+    )
     try:
-        r = requests.get(model_url, timeout=5)
+        r = requests.get(url, timeout=10)
         r.raise_for_status()
-        model = joblib.load(io.BytesIO(r.content))
-        return model
+        return joblib.load(io.BytesIO(r.content))
     except Exception:
         return None
 
-model = load_model(selected_metro)
+model = load_model(selected)
 
-# Clean and compute features
-metro_clean = metro_df.copy()
-metro_clean["rolling_avg_price"] = metro_clean["median_sale_price"].rolling(3).mean()
-metro_clean["yoy_price_change"] = metro_clean["median_sale_price"].pct_change(12) * 100
-metro_clean["lag_1"] = metro_clean["median_sale_price"].shift(1)
-
-# Keep only rows with all required features
-feature_cols = ["median_sale_price", "rolling_avg_price", "yoy_price_change", "lag_1"]
-valid_rows = metro_clean.dropna(subset=feature_cols)
-
-if valid_rows.empty:
-    st.warning("🚫 Not enough complete feature data for prediction in this metro.")
+st.subheader("🔮 Predict Next Month’s Median Price")
+if model is None:
+    st.error(f"No model found for {selected}.")
     st.stop()
 
-latest = valid_rows.iloc[-1]
+# Inputs with defaults
+f1 = st.number_input("Current Median Price", value=float(latest["median_sale_price"]))
+f2 = st.number_input("3-Month Rolling Avg", value=float(latest["rolling_avg"]))
+f3 = st.number_input("YoY % Change", value=float(latest["yoy_pct"]))
+f4 = st.number_input("Last Month’s Price", value=float(latest["lag_1"]))
 
-st.subheader("📈 Prediction Input Features")
-f1 = st.number_input("Current Median Price", value=float(latest["median_sale_price"]), step=1000.0)
-f2 = st.number_input("3-Month Rolling Avg", value=float(latest["rolling_avg_price"]), step=1000.0)
-f3 = st.number_input("Year-over-Year Change (%)", value=float(latest["yoy_price_change"]), step=0.1, format="%.2f")
-f4 = st.number_input("Last Month's Price", value=float(latest["lag_1"]), step=1000.0)
+X = np.array([[f1, f2, f3, f4]])
+try:
+    pred = model.predict(X)[0]
+    st.metric("💰 Predicted Median Price Next Month", f"${pred:,.0f}")
+except Exception as e:
+    st.error(f"Prediction error: {e}")
 
-if model:
-    input_array = np.array([[f1, f2, f3, f4]])
-    try:
-        pred = model.predict(input_array)[0]
-        st.metric(label="🔮 Predicted Next Month Price", value=f"${pred:,.0f}")
-    except Exception as e:
-        st.error(f"❌ Prediction failed: {e}")
-else:
-    st.warning("🚫 No prediction model found for this metro.")
+
