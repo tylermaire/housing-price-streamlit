@@ -51,17 +51,21 @@ def load_model(metro_name):
 
 model = load_model(selected_metro)
 
-# Prepare features
-metro_clean = metro_df.dropna(subset=["median_sale_price"])
-if metro_clean.empty:
-    st.warning("🚫 Not enough valid data available for prediction in this metro.")
-    st.stop()
-
+# Clean and compute features
+metro_clean = metro_df.copy()
 metro_clean["rolling_avg_price"] = metro_clean["median_sale_price"].rolling(3).mean()
 metro_clean["yoy_price_change"] = metro_clean["median_sale_price"].pct_change(12) * 100
 metro_clean["lag_1"] = metro_clean["median_sale_price"].shift(1)
 
-latest = metro_clean.dropna().iloc[-1]
+# Keep only rows with all required features
+feature_cols = ["median_sale_price", "rolling_avg_price", "yoy_price_change", "lag_1"]
+valid_rows = metro_clean.dropna(subset=feature_cols)
+
+if valid_rows.empty:
+    st.warning("🚫 Not enough complete feature data for prediction in this metro.")
+    st.stop()
+
+latest = valid_rows.iloc[-1]
 
 st.subheader("📈 Prediction Input Features")
 f1 = st.number_input("Current Median Price", value=float(latest["median_sale_price"]), step=1000.0)
