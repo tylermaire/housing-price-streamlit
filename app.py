@@ -94,5 +94,3 @@ try:
     st.metric("💰 Predicted Median Price Next Month", f"${pred:,.0f}")
 except Exception as e:
     st.error(f"Prediction error: {e}")
-
-
