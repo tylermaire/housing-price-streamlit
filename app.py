@@ -34,3 +34,30 @@ if sub.empty:
     st.error("No data available for this metro.")
 else:
     st.line_chart(sub.set_index("period_begin")["median_sale_price"])
+
+## Part 2 ##
+
+import requests
+
+# Construct the expected model filename & URL
+safe = selected.replace(",","").replace(" ","_")
+model_fname = f"{safe}_metro_area.pkl"
+model_url = (
+    "https://raw.githubusercontent.com/tylermaire/"
+    "housing-price-streamlit/main/metro_models/"
+    + model_fname
+)
+
+st.write("Looking for model file:", model_fname)
+st.write("Raw URL:", model_url)
+
+# Check if it’s reachable
+try:
+    resp = requests.head(model_url, timeout=5)
+    st.write("HTTP status code:", resp.status_code)
+    if resp.status_code == 200:
+        st.success("Model file is present on GitHub.")
+    else:
+        st.error("Model file *not* found (status ≠ 200).")
+except Exception as e:
+    st.error(f"Error checking model URL: {e}")
