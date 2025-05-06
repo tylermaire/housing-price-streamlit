@@ -3,135 +3,89 @@ import pandas as pd
 import requests
 import io
 import pickle
-try:
-    import joblib
-except ImportError:
-    joblib = None
+import joblib
 
-# Caching the data load
+st.set_page_config(page_title="Metro Housing Predictor", layout="wide")
+
 @st.cache_data
 def load_data():
-    """Load and return the metro housing data from a local TSV file or Redfin URL."""
     try:
         df = pd.read_csv('metro.tsv.gz', sep='\t', compression='gzip')
     except FileNotFoundError:
-        data_url = "https://redfin-public-data.s3.us-west-2.amazonaws.com/redfin_market_tracker/redfin_metro_market_tracker.tsv000.gz"
-        df = pd.read_csv(data_url, sep='\t', compression='gzip')
-    # Parse dates and sort by date for each region
+        url = "https://redfin-public-data.s3.us-west-2.amazonaws.com/redfin_market_tracker/redfin_metro_market_tracker.tsv000.gz"
+        df = pd.read_csv(url, sep='\t', compression='gzip')
+
+    # Standardize column names
+    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
+
+    # Date handling
     if 'period_begin' in df.columns:
-        df['period_begin'] = pd.to_datetime(df['period_begin'])
-        df.sort_values(['region', 'period_begin'], inplace=True)
-    elif 'month' in df.columns and 'year' in df.columns:
-        df['date'] = pd.to_datetime(df['year'].astype(str) + '-' + df['month'].astype(str) + '-01')
-        df.sort_values(['region', 'date'], inplace=True)
+        df['period_begin'] = pd.to_datetime(df['period_begin'], errors='coerce')
+        df.dropna(subset=['period_begin'], inplace=True)
+        df.sort_values(by=['region', 'period_begin'], inplace=True)
     else:
-        date_cols = [col for col in df.columns if 'date' in col.lower() or 'period' in col.lower()]
-        if date_cols:
-            df[date_cols[0]] = pd.to_datetime(df[date_cols[0]])
-            df.sort_values(['region', date_cols[0]], inplace=True)
+        st.error("❌ Could not find a usable date column.")
+        st.stop()
+
     return df
 
-# Load data
-data = load_data()
+# Load dataset
+df = load_data()
 
-# Sidebar or main selection for metro area
-st.title("📈 Metro Housing Market Explorer")
-st.write("Select a metropolitan area to view historical housing market trends and predict the next month's median sale price.")
-metros = sorted(data['region'].dropna().unique())
-search_query = st.text_input("🔍 Search metro area:", "")
-filtered_metros = [m for m in metros if search_query.lower() in m.lower()] if search_query else metros
-selected_metro = st.selectbox("Select Metro Area:", options=filtered_metros)
+# Sidebar metro filter with search
+st.sidebar.title("🏙️ Metro Area Selector")
+metro_list = sorted(df['region'].dropna().unique().tolist())
+search_term = st.sidebar.text_input("Search metros...")
+filtered_metros = [m for m in metro_list if search_term.lower() in m.lower()]
+selected_metro = st.sidebar.selectbox("Choose a metro:", filtered_metros if filtered_metros else metro_list)
 
-# Filter dataframe for the selected metro
-metro_df = data[data['region'] == selected_metro]
-if metro_df.empty:
-    st.error("No data available for the selected metro area.")
+# Filter for selected metro
+sub_df = df[df['region'] == selected_metro].copy()
+if sub_df.empty:
+    st.error("❌ No data found for selected metro.")
     st.stop()
 
-# Historical median sale price chart
-st.subheader(f"Historical Median Sale Price – {selected_metro}")
-if 'median_sale_price' in metro_df.columns:
-    # Use period/date column as index for plotting
-    if 'period_begin' in metro_df.columns:
-        chart_df = metro_df[['period_begin', 'median_sale_price']].copy()
-        chart_df.set_index('period_begin', inplace=True)
-    elif 'date' in metro_df.columns:
-        chart_df = metro_df[['date', 'median_sale_price']].copy()
-        chart_df.set_index('date', inplace=True)
-    else:
-        chart_df = metro_df[['median_sale_price']].copy()
-    st.line_chart(chart_df['median_sale_price'])
-else:
-    st.error("Median sale price data not found for this metro.")
+# Visualization
+st.title(f"📊 Median Sale Price in {selected_metro}")
+sub_df = sub_df.sort_values('period_begin')
+st.line_chart(sub_df.set_index('period_begin')['median_sale_price'])
 
-# Caching model loading
+# Prepare features
+sub_df['rolling_avg'] = sub_df['median_sale_price'].rolling(3).mean()
+sub_df['yoy'] = sub_df['median_sale_price'].pct_change(12)
+sub_df['lag_1'] = sub_df['median_sale_price'].shift(1)
+latest = sub_df.dropna().iloc[-1] if not sub_df.dropna().empty else None
+
+# Load model from GitHub
 @st.cache_resource
-def load_model_for_metro(metro_name):
-    """Download and load the model for the given metro (if available)."""
-    model_filename = metro_name.replace(", ", "_").replace(" ", "_") + ".pkl"
-    model_url = f"https://raw.githubusercontent.com/tylermaire/housing-price-streamlit/main/metro_models/{model_filename}"
+def load_model(name):
+    safe_name = name.replace(",", "").replace(" ", "_")
+    url = f"https://raw.githubusercontent.com/tylermaire/housing-price-streamlit/main/metro_models/{safe_name}.pkl"
     try:
-        resp = requests.get(model_url, timeout=5)
-    except Exception:
-        return None
-    if resp.status_code != 200:
-        return None
-    model_bytes = resp.content
-    try:
-        if joblib:
-            model = joblib.load(io.BytesIO(model_bytes))
-        else:
-            model = pickle.loads(model_bytes)
-    except Exception:
-        try:
-            model = pickle.loads(model_bytes)
-        except Exception:
-            model = None
-    return model
-
-# Load the model for the selected metro
-model = load_model_for_metro(selected_metro)
-
-# Prepare latest data features for prediction
-if 'median_sale_price' not in metro_df.columns or metro_df['median_sale_price'].dropna().empty:
-    st.warning("⚠️ Not enough data to make a prediction for this metro.")
-    st.stop()
-
-latest_row = metro_df.dropna(subset=['median_sale_price']).iloc[-1]
-latest_price = float(latest_row['median_sale_price'])
-ma3 = float(metro_df['median_sale_price'].dropna().tail(3).mean()) if len(metro_df) >= 3 else latest_price
-
-# Calculate YoY change
-yoy_change = 0.0
-if 'year' in metro_df.columns and 'month' in metro_df.columns:
-    if len(metro_df) > 12:
-        prev_year_mask = (
-            (metro_df['year'] == latest_row['year'] - 1) &
-            (metro_df['month'] == latest_row['month'])
-        )
-        prev_year_data = metro_df[prev_year_mask]
-        if not prev_year_data.empty:
-            prev_year_price = float(prev_year_data.iloc[-1]['median_sale_price'])
-            if prev_year_price != 0:
-                yoy_change = ((latest_price - prev_year_price) / prev_year_price) * 100
-elif 'median_sale_price_yoy' in latest_row:
-    yoy_change = float(latest_row['median_sale_price_yoy'])
-
-prev_price = float(metro_df['median_sale_price'].dropna().iloc[-2]) if len(metro_df) >= 2 else latest_price
-
-# Prediction section
-st.subheader("Predict Next Month's Median Sale Price")
-if model is None:
-    st.warning(f"No prediction model available for **{selected_metro}**. Unable to forecast next month's price.")
-else:
-    st.markdown("Adjust the inputs if necessary and see the predicted next month’s median price:")
-    price_input = st.number_input("Latest median sale price", value=latest_price or 0.0, format="%f")
-    ma3_input = st.number_input("3-month rolling average", value=ma3 or 0.0, format="%f")
-    yoy_input = st.number_input("Year-over-year change (%)", value=yoy_change or 0.0, format="%f")
-    lag_input = st.number_input("Previous month median price", value=prev_price or 0.0, format="%f")
-    try:
-        pred = model.predict([[price_input, ma3_input, yoy_input, lag_input]])[0]
-        st.metric(label="🔮 Predicted Next Month Price", value=f"${pred:,.0f}")
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            return joblib.load(io.BytesIO(resp.content))
     except Exception as e:
-        st.error("An error occurred during prediction. Please check the input values or try a different metro.")
+        st.warning(f"⚠️ Model error: {e}")
+    return None
+
+model = load_model(selected_metro)
+
+# Predict
+st.header("💰 Predicted Price Next Month")
+if latest is None or model is None:
+    st.warning("🚫 Not enough data or model not found for this metro.")
+else:
+    f1 = st.number_input("Latest Median Price", value=float(latest['median_sale_price']))
+    f2 = st.number_input("3-Month Avg Price", value=float(latest['rolling_avg']))
+    f3 = st.number_input("YoY % Change", value=float(latest['yoy']))
+    f4 = st.number_input("Last Month's Price", value=float(latest['lag_1']))
+
+    try:
+        X = [[f1, f2, f3, f4]]
+        pred = model.predict(X)[0]
+        st.success(f"📈 Predicted Median Price: **${pred:,.0f}**")
+    except Exception as e:
+        st.error(f"Prediction error: {e}")
+
 
