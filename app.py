@@ -11,7 +11,7 @@ import gdown
 DATA_FILE_ID = "1ThLQ_PEE5uceKdPry5erfRtyrGT2Xy9C"  # metro.tsv.gz
 GITHUB_MODEL_BASE_URL = "https://raw.githubusercontent.com/tylermaire/housing-price-streamlit/main/metro_model"
 
-# -------------------- Step 1: Download metro.tsv.gz from Drive --------------------
+# -------------------- Step 1: Download metro.tsv.gz --------------------
 @st.cache_resource
 def download_data_file():
     if not os.path.exists("metro.tsv.gz"):
@@ -67,8 +67,14 @@ if model is None:
     st.error(f"🚫 Model not found for {selected}. Expected GitHub file: `{model_name}`")
     st.stop()
 
-# -------------------- Step 8: Prediction Inputs --------------------
-latest = sub.dropna().iloc[-1]
+# -------------------- Step 8: Handle missing data --------------------
+sub_clean = sub.dropna(subset=['median_sale_price', 'rolling_avg_price', 'yoy_price_change', 'lag_1'])
+
+if sub_clean.empty:
+    st.warning(f"⚠️ Not enough data to make a prediction for {selected}. Try another metro area.")
+    st.stop()
+
+latest = sub_clean.iloc[-1]
 f1 = st.sidebar.number_input("Current Median Price", value=float(latest['median_sale_price']), step=1000.0)
 f2 = st.sidebar.number_input("3-Month Avg Price", value=float(latest['rolling_avg_price']), step=1000.0)
 f3 = st.sidebar.number_input("YoY % Change", value=float(latest['yoy_price_change']), step=0.01, format="%.3f")
