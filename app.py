@@ -1,10 +1,8 @@
 import os
-import sys
-import subprocess
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
+import xgboost as xgb
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -64,42 +62,33 @@ if features_df.empty:
 latest = features_df.iloc[-1]
 
 # ----------------------
-# 5. Load global XGB model (with pkg_resources fallback)
+# 5. Load native XGBoost booster
 # ----------------------
-def load_global_model():
-    MODEL_PATH = os.path.join("metro_model_2", "xgb_log_price_model.pkl")
-    if not os.path.exists(MODEL_PATH):
-        st.error(f"🚫 Model not found: {MODEL_PATH}")
+def load_booster_model():
+    ubj_path = os.path.join("metro_model_2", "xgb_model.ubj")
+    if not os.path.exists(ubj_path):
+        st.error(f"🚫 Model file not found: {ubj_path}")
         st.stop()
-
     try:
-        return joblib.load(MODEL_PATH)
-    except ModuleNotFoundError as e:
-        # Handle missing pkg_resources by installing setuptools
-        if "pkg_resources" in str(e):
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--upgrade", "setuptools"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True
-            )
-            import pkg_resources  # now available
-            return joblib.load(MODEL_PATH)
-        else:
-            st.error(f"🚫 Failed to load model: {e}")
-            st.stop()
+        booster = xgb.Booster()
+        booster.load_model(ubj_path)
+        # wrap in XGBRegressor API
+        model = xgb.XGBRegressor()
+        model._Booster = booster
+        model.n_features_in_ = 4
+        return model
     except Exception as e:
-        st.error(f"🚫 Failed to load model: {e}")
+        st.error(f"🚫 Failed to load XGBoost model: {e}")
         st.stop()
 
-model = load_global_model()
+model = load_booster_model()
 
 # ----------------------
-# 6. Optional: show linear coefficients
+# 6. (Optional) Show coefficients if linear
 # ----------------------
 if hasattr(model, "coef_"):
     coeffs = model.coef_
-    feats  = ["median_sale_price", "rolling_avg", "yoy_pct", "lag_1"]
+    feats  = feature_cols
     fi     = pd.DataFrame({"feature": feats, "coef": coeffs}).set_index("feature")
     st.subheader("📈 Model Coefficients")
     st.bar_chart(fi["coef"])
@@ -113,7 +102,7 @@ f2 = st.number_input("3-Month Rolling Average", value=float(latest["rolling_avg"
 f3 = st.number_input("Year-over-Year % Change", value=float(latest["yoy_pct"]))
 f4 = st.number_input("Previous Month’s Price",  value=float(latest["lag_1"]))
 
-X = np.array([[f1, f2, f3, f4]])
+X     = np.array([[f1, f2, f3, f4]])
 try:
     pred = model.predict(X)[0]
     st.metric("💰 Predicted Median Price Next Month", f"${pred:,.0f}")
@@ -127,13 +116,13 @@ except Exception as e:
 hist = sub[["period_begin", "median_sale_price"]].dropna().copy()
 if pred is not None:
     next_month = hist["period_begin"].max() + pd.DateOffset(months=1)
-    hist = pd.concat(
-        [hist, pd.DataFrame({
+    hist = pd.concat([
+        hist,
+        pd.DataFrame({
             "period_begin": [next_month],
             "median_sale_price": [pred]
-        })],
-        ignore_index=True
-    )
+        })
+    ], ignore_index=True)
 
 csv = hist.to_csv(index=False)
 st.download_button("📥 Download Historical + Forecast CSV", csv, "forecast.csv", "text/csv")
@@ -159,13 +148,10 @@ def create_pdf():
     return path
 
 pdf_path = create_pdf()
-st.download_button(
-    "📥 Download PDF Summary", open(pdf_path, "rb"),
-    "summary.pdf", "application/pdf"
-)
+st.download_button("📥 Download PDF Summary", open(pdf_path, "rb"), "summary.pdf", "application/pdf")
 
 # ----------------------
-# 9. Custom‐value quick prediction
+# 9. Custom-value quick prediction
 # ----------------------
 st.subheader("🔧 Quick Predict From Custom House Value")
 custom_price = st.number_input(
