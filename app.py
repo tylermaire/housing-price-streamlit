@@ -2,7 +2,7 @@ import os
 import streamlit as st
 import pandas as pd
 import numpy as np
-import xgboost as xgb
+import joblib
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -40,7 +40,7 @@ choices    = [m for m in all_metros if search.lower() in m.lower()] if search el
 selected   = st.sidebar.selectbox("Choose a metro", choices)
 
 # ----------------------
-# 3. Historical median price chart
+# 3. Plot historical median price
 # ----------------------
 sub = df[df["region"] == selected].sort_values("period_begin")
 st.title(f"📊 Historical Median Sale Price — {selected}")
@@ -62,36 +62,29 @@ if features_df.empty:
 latest = features_df.iloc[-1]
 
 # ----------------------
-# 5. Load native XGBoost booster
+# 5. Load the HistGradientBoostingRegressor model
 # ----------------------
-def load_booster_model():
-    ubj_path = os.path.join("metro_model_2", "xgb_model.ubj")
-    if not os.path.exists(ubj_path):
-        st.error(f"🚫 Model file not found: {ubj_path}")
+@st.cache_resource
+def load_model():
+    path = os.path.join("metro_model_2", "hgb_log_price_model.pkl")
+    if not os.path.exists(path):
+        st.error(f"🚫 Model file not found: {path}")
         st.stop()
     try:
-        booster = xgb.Booster()
-        booster.load_model(ubj_path)
-        # wrap in XGBRegressor API
-        model = xgb.XGBRegressor()
-        model._Booster = booster
-        model.n_features_in_ = 4
-        return model
+        return joblib.load(path)
     except Exception as e:
-        st.error(f"🚫 Failed to load XGBoost model: {e}")
+        st.error(f"🚫 Failed to load model: {e}")
         st.stop()
 
-model = load_booster_model()
+model = load_model()
 
 # ----------------------
-# 6. (Optional) Show coefficients if linear
+# 6. (Optional) Show model feature importances if available
 # ----------------------
-if hasattr(model, "coef_"):
-    coeffs = model.coef_
-    feats  = feature_cols
-    fi     = pd.DataFrame({"feature": feats, "coef": coeffs}).set_index("feature")
-    st.subheader("📈 Model Coefficients")
-    st.bar_chart(fi["coef"])
+if hasattr(model, "feature_importances_"):
+    fi = pd.Series(model.feature_importances_, index=feature_cols)
+    st.subheader("📈 Feature Importances")
+    st.bar_chart(fi)
 
 # ----------------------
 # 7. Predict next‐month median price
@@ -102,7 +95,7 @@ f2 = st.number_input("3-Month Rolling Average", value=float(latest["rolling_avg"
 f3 = st.number_input("Year-over-Year % Change", value=float(latest["yoy_pct"]))
 f4 = st.number_input("Previous Month’s Price",  value=float(latest["lag_1"]))
 
-X     = np.array([[f1, f2, f3, f4]])
+X = np.array([[f1, f2, f3, f4]])
 try:
     pred = model.predict(X)[0]
     st.metric("💰 Predicted Median Price Next Month", f"${pred:,.0f}")
@@ -115,14 +108,9 @@ except Exception as e:
 # ----------------------
 hist = sub[["period_begin", "median_sale_price"]].dropna().copy()
 if pred is not None:
-    next_month = hist["period_begin"].max() + pd.DateOffset(months=1)
-    hist = pd.concat([
-        hist,
-        pd.DataFrame({
-            "period_begin": [next_month],
-            "median_sale_price": [pred]
-        })
-    ], ignore_index=True)
+    nxt = hist["period_begin"].max() + pd.DateOffset(months=1)
+    forecast = pd.DataFrame({"period_begin":[nxt],"median_sale_price":[pred]})
+    hist = pd.concat([hist, forecast], ignore_index=True)
 
 csv = hist.to_csv(index=False)
 st.download_button("📥 Download Historical + Forecast CSV", csv, "forecast.csv", "text/csv")
@@ -138,20 +126,19 @@ def create_pdf():
         fig.autofmt_xdate()
         pdf.savefig(fig)
         plt.close(fig)
-        if hasattr(model, "coef_"):
+        if hasattr(model, "feature_importances_"):
             fig2, ax2 = plt.subplots()
-            fi["coef"].plot(kind="bar", ax=ax2)
-            ax2.set_title("Model Coefficients")
-            ax2.set_ylabel("Coefficient")
+            fi.plot(kind="bar", ax=ax2)
+            ax2.set_title("Feature Importances")
             pdf.savefig(fig2)
             plt.close(fig2)
     return path
 
 pdf_path = create_pdf()
-st.download_button("📥 Download PDF Summary", open(pdf_path, "rb"), "summary.pdf", "application/pdf")
+st.download_button("📥 Download PDF Summary", open(pdf_path,"rb"), "summary.pdf","application/pdf")
 
 # ----------------------
-# 9. Custom-value quick prediction
+# 9. Custom‐value quick prediction
 # ----------------------
 st.subheader("🔧 Quick Predict From Custom House Value")
 custom_price = st.number_input(
@@ -169,3 +156,4 @@ try:
     st.metric("📈 Predicted Next-Month Price", f"${custom_pred:,.0f}")
 except Exception as e:
     st.error(f"❌ Custom prediction failed: {e}")
+
