@@ -1,10 +1,12 @@
 # ----------------------
-# 0. Ensure xgboost is available
+# 0. Ensure required packages are available
 # ----------------------
-import sys, subprocess
+import sys
+import subprocess
 
+# Install xgboost and setuptools (for pkg_resources) at runtime if missing
 subprocess.run(
-    [sys.executable, "-m", "pip", "install", "xgboost"], 
+    [sys.executable, "-m", "pip", "install", "xgboost", "setuptools"],
     stdout=subprocess.DEVNULL,
     stderr=subprocess.DEVNULL,
     check=False
@@ -14,7 +16,7 @@ subprocess.run(
 # 1. Imports
 # ----------------------
 import os
-import pkg_resources              # <— ensure unpickler can find this
+import pkg_resources         # now guaranteed to exist
 import streamlit as st
 import pandas as pd
 import numpy as np
