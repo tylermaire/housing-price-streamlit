@@ -6,3 +6,4 @@ joblib
 gdown
 matplotlib
 requests
+xgboost==1.6.1
