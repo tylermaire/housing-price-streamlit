@@ -1,22 +1,24 @@
 # ----------------------
-# 0. Ensure required packages are available
+# 0. Ensure xgboost & setuptools (pkg_resources) are available
 # ----------------------
-import sys
-import subprocess
+import sys, subprocess
 
-# Install xgboost and setuptools (for pkg_resources) at runtime if missing
-subprocess.run(
-    [sys.executable, "-m", "pip", "install", "xgboost", "setuptools"],
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
-    check=False
-)
+for pkg in ("xgboost", "setuptools"):
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", pkg],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
+    )
 
 # ----------------------
-# 1. Imports
+# 1. Imports (now that pkg_resources may exist)
 # ----------------------
 import os
-import pkg_resources         # now guaranteed to exist
+try:
+    import pkg_resources
+except ImportError:
+    # pkg_resources not critical—we'll proceed anyway
+    pass
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -142,7 +144,6 @@ st.download_button("📥 Download Historical + Forecast CSV", csv, "forecast.csv
 def create_pdf():
     path = "summary.pdf"
     with PdfPages(path) as pdf:
-        # Time‐series plot
         fig, ax = plt.subplots()
         ax.plot(hist["period_begin"], hist["median_sale_price"], marker="o")
         ax.set_title(f"{selected} Price History + Forecast")
@@ -151,7 +152,6 @@ def create_pdf():
         fig.autofmt_xdate()
         pdf.savefig(fig)
         plt.close(fig)
-        # Coefficients plot
         if hasattr(model, "coef_"):
             fig2, ax2 = plt.subplots()
             fi["coef"].plot(kind="bar", ax=ax2)
