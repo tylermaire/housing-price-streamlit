@@ -7,3 +7,4 @@ gdown
 matplotlib
 requests
 xgboost==1.6.1
+setuptools>=60.0.0
