@@ -5,6 +5,8 @@ import numpy as np
 import joblib
 import requests
 from io import BytesIO
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 st.set_page_config(page_title="🏠 Metro Price Predictor", layout="wide")
 
@@ -24,8 +26,7 @@ def load_data():
 
     df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
     df = df[df["region_type"] == "metro"]
-
-    df["period_begin"] = pd.to_datetime(df["period_begin"], errors="coerce")
+    df["period_begin"]      = pd.to_datetime(df["period_begin"], errors="coerce")
     df["median_sale_price"] = pd.to_numeric(df["median_sale_price"], errors="coerce")
 
     return df.dropna(subset=["region", "period_begin", "median_sale_price"])
@@ -36,10 +37,10 @@ df = load_data()
 # 1. Sidebar: metro search & selection
 # ----------------------
 st.sidebar.title("🏙️ Metro Selection")
-search = st.sidebar.text_input("🔍 Search metros")
+search     = st.sidebar.text_input("🔍 Search metros")
 all_metros = sorted(df["region"].unique())
-choices = [m for m in all_metros if search.lower() in m.lower()] if search else all_metros
-selected = st.sidebar.selectbox("Choose a metro", choices)
+choices    = [m for m in all_metros if search.lower() in m.lower()] if search else all_metros
+selected   = st.sidebar.selectbox("Choose a metro", choices)
 
 # ----------------------
 # 2. Plot historical median price
@@ -56,7 +57,7 @@ sub["yoy_pct"]     = sub["median_sale_price"].pct_change(12) * 100
 sub["lag_1"]       = sub["median_sale_price"].shift(1)
 
 feature_cols = ["median_sale_price", "rolling_avg", "yoy_pct", "lag_1"]
-features_df = sub.dropna(subset=feature_cols)
+features_df  = sub.dropna(subset=feature_cols)
 if features_df.empty:
     st.warning("🚫 Not enough complete data for prediction features.")
     st.stop()
@@ -80,7 +81,7 @@ def load_global_model():
 model = load_global_model()
 
 # ----------------------
-# 5. Show coefficients if linear (optional)
+# 5. Show coefficients if linear
 # ----------------------
 if hasattr(model, "coef_"):
     coeffs = model.coef_
@@ -98,7 +99,8 @@ f2 = st.number_input("3-Month Rolling Average", value=float(latest["rolling_avg"
 f3 = st.number_input("Year-over-Year % Change", value=float(latest["yoy_pct"]))
 f4 = st.number_input("Previous Month’s Price",  value=float(latest["lag_1"]))
 
-X = np.array([[f1, f2, f3, f4]])
+X    = np.array([[f1, f2, f3, f4]])
+pred = None
 try:
     pred = model.predict(X)[0]
     st.metric("💰 Predicted Median Price Next Month", f"${pred:,.0f}")
@@ -109,23 +111,19 @@ except Exception as e:
 # 7. Download CSV & PDF
 # ----------------------
 hist = sub[["period_begin", "median_sale_price"]].dropna().copy()
-next_month = hist["period_begin"].max() + pd.DateOffset(months=1)
-hist = pd.concat([hist, pd.DataFrame({
-    "period_begin": [next_month],
-    "median_sale_price": [pred]
-})], ignore_index=True)
+if pred is not None:
+    next_month = hist["period_begin"].max() + pd.DateOffset(months=1)
+    hist = pd.concat([hist, pd.DataFrame({
+        "period_begin": [next_month],
+        "median_sale_price": [pred]
+    })], ignore_index=True)
 
 csv = hist.to_csv(index=False)
 st.download_button("📥 Download Historical + Forecast CSV", csv, "forecast.csv", "text/csv")
 
-# PDF export (optional)
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-
 def create_pdf():
     path = "summary.pdf"
     with PdfPages(path) as pdf:
-        # Time series plot
         fig, ax = plt.subplots()
         ax.plot(hist["period_begin"], hist["median_sale_price"], marker="o")
         ax.set_title(f"{selected} Price History + Forecast")
@@ -134,9 +132,7 @@ def create_pdf():
         fig.autofmt_xdate()
         pdf.savefig(fig)
         plt.close(fig)
-        # Coefficient bar if available
         if hasattr(model, "coef_"):
-            fi = pd.DataFrame({"feature": feats, "coef": coeffs}).set_index("feature")
             fig2, ax2 = plt.subplots()
             fi["coef"].plot(kind="bar", ax=ax2)
             ax2.set_title("Model Coefficients")
@@ -147,3 +143,24 @@ def create_pdf():
 
 pdf_path = create_pdf()
 st.download_button("📥 Download PDF Summary", open(pdf_path, "rb"), "summary.pdf", "application/pdf")
+
+# ----------------------
+# 8. Quick custom-house-value prediction
+# ----------------------
+st.subheader("🔧 Quick Predict From Custom House Value")
+custom_price = st.number_input(
+    "Enter a hypothetical current median price", 
+    value=float(latest["median_sale_price"])
+)
+# reuse latest computed f2,f3,f4
+custom_X = np.array([[
+    custom_price, 
+    float(latest["rolling_avg"]), 
+    float(latest["yoy_pct"]), 
+    float(latest["lag_1"])
+]])
+try:
+    custom_pred = model.predict(custom_X)[0]
+    st.metric("📈 Predicted Next-Month Price", f"${custom_pred:,.0f}")
+except Exception as e:
+    st.error(f"❌ Custom prediction failed: {e}")
