@@ -1,34 +1,15 @@
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
-import requests, io, os, zipfile, joblib
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-import gdown
+import joblib
+import requests
+from io import BytesIO
 
 st.set_page_config(page_title="🏠 Metro Price Predictor", layout="wide")
 
-# -----------------------
-# 0. Ensure real models exist locally (download & unzip from Google Drive)
-# -----------------------
-DRIVE_ID = "1gVGV1XUzwoy1xlA1CcHCgAJgioGC-RHz"  # Your Google Drive ZIP file ID
-ZIP_URL  = f"https://drive.google.com/uc?export=download&id={DRIVE_ID}"
-MODELS_DIR = "metro_models"
-ZIP_PATH = "metro_models.zip"
-
-def ensure_models():
-    if not os.path.isdir(MODELS_DIR) or len(os.listdir(MODELS_DIR)) == 0:
-        st.info("🚚 Downloading model archive from Google Drive...")
-        gdown.download(ZIP_URL, ZIP_PATH, quiet=False)
-        with zipfile.ZipFile(ZIP_PATH, "r") as z:
-            z.extractall(MODELS_DIR)
-        os.remove(ZIP_PATH)
-        st.success("✅ Models ready.")
-
-ensure_models()
-
 # ----------------------
-# 1. Load & cache Redfin metro data
+# 0. Load & cache Redfin metro data
 # ----------------------
 @st.cache_data
 def load_data():
@@ -40,82 +21,82 @@ def load_data():
             "redfin_market_tracker/redfin_metro_market_tracker.tsv000.gz"
         )
         df = pd.read_csv(url, sep="\t", compression="gzip", low_memory=False)
+
     df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
     df = df[df["region_type"] == "metro"]
+
     df["period_begin"] = pd.to_datetime(df["period_begin"], errors="coerce")
     df["median_sale_price"] = pd.to_numeric(df["median_sale_price"], errors="coerce")
-    df = df.dropna(subset=["region", "period_begin", "median_sale_price"])
-    return df
+
+    return df.dropna(subset=["region", "period_begin", "median_sale_price"])
 
 df = load_data()
 
 # ----------------------
-# 2. Sidebar: metro search & selection
+# 1. Sidebar: metro search & selection
 # ----------------------
 st.sidebar.title("🏙️ Metro Selection")
-search = st.sidebar.text_input("🔍 Search metros", "")
+search = st.sidebar.text_input("🔍 Search metros")
 all_metros = sorted(df["region"].unique())
 choices = [m for m in all_metros if search.lower() in m.lower()] if search else all_metros
 selected = st.sidebar.selectbox("Choose a metro", choices)
 
 # ----------------------
-# 3. Plot historical median price
+# 2. Plot historical median price
 # ----------------------
 sub = df[df["region"] == selected].sort_values("period_begin")
 st.title(f"📊 Historical Median Sale Price — {selected}")
 st.line_chart(sub.set_index("period_begin")["median_sale_price"])
 
 # ----------------------
-# 4. Compute features
+# 3. Compute features for prediction
 # ----------------------
 sub["rolling_avg"] = sub["median_sale_price"].rolling(3).mean()
-sub["yoy_pct"]   = sub["median_sale_price"].pct_change(12) * 100
-sub["lag_1"]     = sub["median_sale_price"].shift(1)
+sub["yoy_pct"]     = sub["median_sale_price"].pct_change(12) * 100
+sub["lag_1"]       = sub["median_sale_price"].shift(1)
+
 feature_cols = ["median_sale_price", "rolling_avg", "yoy_pct", "lag_1"]
 features_df = sub.dropna(subset=feature_cols)
 if features_df.empty:
     st.warning("🚫 Not enough complete data for prediction features.")
     st.stop()
+
 latest = features_df.iloc[-1]
 
 # ----------------------
-# 5. Display model coefficients
+# 4. Load the single global XGB model
 # ----------------------
-def load_local_model(name):
-    # strip trailing ' metro area'
-    if name.lower().endswith(" metro area"):
-        name = name[: -len(" metro area")]
-    safe = name.replace(",", "").replace(" ", "_").replace("/", "_")
-    path = os.path.join(MODELS_DIR, f"{safe}_metro_area.pkl")
-    if not os.path.exists(path):
-        return None
+def load_global_model():
+    MODEL_PATH = os.path.join("metro_model_2", "xgb_log_price_model.pkl")
+    if not os.path.exists(MODEL_PATH):
+        st.error("🚫 Model file not found: " + MODEL_PATH)
+        st.stop()
     try:
-        return joblib.load(path)
-    except Exception:
-        return None
+        return joblib.load(MODEL_PATH)
+    except Exception as e:
+        st.error(f"🚫 Failed to load model: {e}")
+        st.stop()
 
-model = load_local_model(selected)
-
-if model is None:
-    st.error(f"🚫 No model found for {selected}.")
-    st.stop()
-
-# If model has coefficients, show them
-if hasattr(model, 'coef_'):
-    coeffs = model.coef_
-    feats = ['median_sale_price','rolling_avg','yoy_pct','lag_1']
-    fi = pd.DataFrame({'feature':feats,'coef':coeffs}).set_index('feature')
-    st.subheader("📈 Model Coefficients")
-    st.bar_chart(fi['coef'])
+model = load_global_model()
 
 # ----------------------
-# 6. Prediction inputs & CSV download
+# 5. Show coefficients if linear (optional)
+# ----------------------
+if hasattr(model, "coef_"):
+    coeffs = model.coef_
+    feats  = ["median_sale_price", "rolling_avg", "yoy_pct", "lag_1"]
+    fi     = pd.DataFrame({"feature": feats, "coef": coeffs}).set_index("feature")
+    st.subheader("📈 Model Coefficients")
+    st.bar_chart(fi["coef"])
+
+# ----------------------
+# 6. Prediction inputs & metric
 # ----------------------
 st.subheader("🔮 Predict Next Month’s Median Price")
-f1 = st.number_input("Latest Median Price",        value=float(latest["median_sale_price"]), help="The median sale price in the most recent period.")
-f2 = st.number_input("3-Month Rolling Average",    value=float(latest["rolling_avg"]),       help="Average of the last 3 months' median sale prices.")
-f3 = st.number_input("Year-over-Year % Change",    value=float(latest["yoy_pct"]),           help="% change compared to same month last year.")
-f4 = st.number_input("Previous Month’s Price",     value=float(latest["lag_1"]),             help="Median sale price one month ago.")
+f1 = st.number_input("Latest Median Price",     value=float(latest["median_sale_price"]))
+f2 = st.number_input("3-Month Rolling Average", value=float(latest["rolling_avg"]))
+f3 = st.number_input("Year-over-Year % Change", value=float(latest["yoy_pct"]))
+f4 = st.number_input("Previous Month’s Price",  value=float(latest["lag_1"]))
 
 X = np.array([[f1, f2, f3, f4]])
 try:
@@ -124,41 +105,45 @@ try:
 except Exception as e:
     st.error(f"❌ Prediction failed: {e}")
 
-# CSV download of historical + forecast
-hist = sub[['period_begin', 'median_sale_price']].dropna().copy()
-next_month = hist['period_begin'].max() + pd.DateOffset(months=1)
-# Add forecast row for next month using concat
-new_row = pd.DataFrame({'period_begin': [next_month], 'median_sale_price': [pred]})
-hist = pd.concat([hist, new_row], ignore_index=True)
-# Convert to CSV and provide download button
-csv = hist.to_csv(index=False)
-st.download_button("📥 Download Historical + Forecast CSV", csv, file_name="forecast.csv", mime="text/csv")
+# ----------------------
+# 7. Download CSV & PDF
+# ----------------------
+hist = sub[["period_begin", "median_sale_price"]].dropna().copy()
+next_month = hist["period_begin"].max() + pd.DateOffset(months=1)
+hist = pd.concat([hist, pd.DataFrame({
+    "period_begin": [next_month],
+    "median_sale_price": [pred]
+})], ignore_index=True)
 
-# PDF summary download
+csv = hist.to_csv(index=False)
+st.download_button("📥 Download Historical + Forecast CSV", csv, "forecast.csv", "text/csv")
+
+# PDF export (optional)
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+
 def create_pdf():
-    pdf_path = 'summary.pdf'
-    with PdfPages(pdf_path) as pdf:
-        # Price history + forecast plot
+    path = "summary.pdf"
+    with PdfPages(path) as pdf:
+        # Time series plot
         fig, ax = plt.subplots()
-        ax.plot(hist['period_begin'], hist['median_sale_price'], marker='o')
-        ax.set_title(f'{selected} Price History + Forecast')
-        ax.set_xlabel('Date')
-        ax.set_ylabel('Median Sale Price')
+        ax.plot(hist["period_begin"], hist["median_sale_price"], marker="o")
+        ax.set_title(f"{selected} Price History + Forecast")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Median Sale Price")
         fig.autofmt_xdate()
         pdf.savefig(fig)
         plt.close(fig)
-        # Coefficients plot
-        if hasattr(model, 'coef_'):
-            fi = pd.DataFrame({'feature': ['median_sale_price', 'rolling_avg', 'yoy_pct', 'lag_1'], 'coef': model.coef_}).set_index('feature')
+        # Coefficient bar if available
+        if hasattr(model, "coef_"):
+            fi = pd.DataFrame({"feature": feats, "coef": coeffs}).set_index("feature")
             fig2, ax2 = plt.subplots()
-            fi['coef'].plot(kind='bar', ax=ax2)
-            ax2.set_title('Model Coefficients')
-            ax2.set_ylabel('Coefficient')
+            fi["coef"].plot(kind="bar", ax=ax2)
+            ax2.set_title("Model Coefficients")
+            ax2.set_ylabel("Coefficient")
             pdf.savefig(fig2)
             plt.close(fig2)
-    return pdf_path
+    return path
 
-pdf_file = create_pdf()
-with open(pdf_file, 'rb') as f:
-    pdf_bytes = f.read()
-st.download_button("📥 Download PDF Summary", pdf_bytes, file_name="summary.pdf", mime="application/pdf")
+pdf_path = create_pdf()
+st.download_button("📥 Download PDF Summary", open(pdf_path, "rb"), "summary.pdf", "application/pdf")
