@@ -194,3 +194,18 @@ custom_X     = np.array([[
 custom_log_pred = model.predict(custom_X)[0]
 custom_price_pred = np.exp(custom_log_pred)
 st.metric("📈 Forecast for Custom Price", f"${custom_price_pred:,.0f}")
+
+
+# ----------------------
+# 10. Legal disclaimer (displayed at the bottom of the sidebar)
+# ----------------------
+st.sidebar.markdown("---")
+st.sidebar.markdown(
+    "**Legal Disclaimer**  \n"
+    "This application is provided **for research and testing purposes only**.  "
+    "The housing‑price predictions and visualizations shown here are "
+    "_not_ intended as real‑estate or investment advice, nor should they be "
+    "used as the basis for any financial decision. Housing markets can be "
+    "influenced by numerous unpredictable factors that are not captured in "
+    "this simplified model. The authors assume **no liability** for decisions "
+    "made using this tool."
