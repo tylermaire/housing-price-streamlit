@@ -209,3 +209,4 @@ st.sidebar.markdown(
     "influenced by numerous unpredictable factors that are not captured in "
     "this simplified model. The authors assume **no liability** for decisions "
     "made using this tool."
+)
